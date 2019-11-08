@@ -116,6 +116,39 @@ class image_converter:
 
     # 128 pixels = 5m then 25.6 pixels to a metre.
 
+    def calculate_joint_angles(self, actual_target_pos, test_angle):
+        actual_target_pos = list(actual_target_pos)
+        magnitude_of_input = math.sqrt(actual_target_pos[1] * actual_target_pos[1] + actual_target_pos[0] * actual_target_pos[0])
+        angle_of_input = math.atan(actual_target_pos[2]/magnitude_of_input)
+        actual_target_pos[2] = 1.41 * math.tan(angle_of_input)
+
+        beta = math.pi / 2 - angle_of_input
+        pos = test_angle % (math.pi * 2)
+        test_angle = math.atan(math.cos(beta) * math.tan(test_angle))
+        test_angle += math.pi if math.pi / 2 < pos < math.pi * 3 / 2 else 0
+        test_angle = (test_angle + math.pi) % (math.pi * 2) - math.pi
+
+        x = actual_target_pos[0]
+        y = actual_target_pos[1]
+        joint1 = (-test_angle + math.atan2(y, x)) % (math.pi * 2) - math.pi
+
+        test_angle = test_angle if test_angle < 0 else math.pi - test_angle
+        c = math.cos(test_angle + math.pi * 3 / 4)
+        s = math.sin(test_angle + math.pi * 3 / 4)
+        target_pos = [c - s, s + c, actual_target_pos[2]]
+        joint2 = -math.atan(target_pos[1] / target_pos[2])
+        target_pos_magnitude = math.sqrt(target_pos[2] * target_pos[2] + target_pos[1] * target_pos[1])
+        transformed_target_pos = [target_pos[0], target_pos_magnitude * math.copysign(1, target_pos[1]), 0]
+        joint3 = math.atan(transformed_target_pos[0] / transformed_target_pos[1])
+
+        return joint1, joint2, joint3
+
+    def angle_between_three_points(self, a, b, c):
+        ba = a - b
+        bc = c - b
+        cosine_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
+        return np.arccos(cosine_angle)
+
     # Recieve data and save it for camera 1's callback.
     def callback1(self, data):
         self.cv_image1 = self.bridge.imgmsg_to_cv2(data, "bgr8").copy()
@@ -193,21 +226,11 @@ class image_converter:
         # joint1 = 0
         # joint4 = 0
 
-        actual_target_pos = [4, 4, 4]
-        test_angle = time.time()/2 % (math.pi * 2) - math.pi
-        x = actual_target_pos[0]
-        y = actual_target_pos[1]
-        joint1 = -test_angle
-        test_angle = test_angle if test_angle < 0 else math.pi-test_angle
-        c = math.cos(test_angle+math.pi*3/4)
-        s = math.sin(test_angle+math.pi*3/4)
-        target_pos = [x * c - y * s, x * s + y * c, actual_target_pos[2]]
-        joint2 = -math.atan(target_pos[1] / target_pos[2])
-        target_pos_magnitude = math.sqrt(target_pos[2] * target_pos[2] + target_pos[1] * target_pos[1])
-        transformed_target_pos = [target_pos[0], target_pos_magnitude * math.copysign(1, target_pos[1]), 0]
-        joint3 = math.atan(transformed_target_pos[0] / transformed_target_pos[1])
-        joint4 = math.pi/2
+        actual_target_pos = master_positions[4]
+        test_angle = time.time()/2
 
+        joint1, joint2, joint3 = self.calculate_joint_angles(actual_target_pos, test_angle)
+        joint4 = math.pi/2 # self.angle_between_three_points(master_positions[1], master_positions[2], master_positions[3])
 
         cv2.imshow('window1', np.asarray(img1))
         cv2.imshow('window2', np.asarray(img2))
