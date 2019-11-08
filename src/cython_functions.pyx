@@ -69,6 +69,27 @@ cpdef unsigned char[:, :, :] select_colour(unsigned char [:,:,:] image, long [:]
 
     return image
 
+@cython.boundscheck(False)
+cpdef unsigned char[:, :, :] remove_thin_bits(unsigned char [:,:,:] image, long width, int channel) nogil:
+    cdef int x, y, w, h, erase_x, processing_x
+    cdef int red, green, blue
+    h = image.shape[0]
+    w = image.shape[1]
+
+    for y in range(0, h):
+        for x in range(0, w):
+            if image[y, x, channel] != 0 and image[y, x-1, channel] == 0:
+                processing_x = x
+                while image[y, processing_x, channel] != 0:
+                    processing_x += 1
+
+                if processing_x - x < width:
+                    for erase_x in range(x, processing_x):
+                         image[y,x,0] = 0
+                         image[y,x,1] = 0
+                         image[y,x,2] = 0
+
+    return image
 
 
 
