@@ -20,6 +20,7 @@ class image_converter:
     # Defines publisher and subscriber
     def __init__(self):
         self.last_known_locations = np.zeros(shape=(5,3))
+        self.my_estimation = (-1, -1, -1, -1)
 
         # initialize the node named image_processing
         rospy.init_node('image_processing', anonymous=True)
@@ -146,6 +147,9 @@ class image_converter:
     def angle_between_three_points(self, a, b, c):
         ba = a - b
         bc = c - b
+        return self.angle_between_two_vectors(ba, bc)
+
+    def angle_between_two_vectors(self, ba, bc):
         cosine_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
         return np.arccos(cosine_angle)
 
@@ -155,6 +159,8 @@ class image_converter:
 
     # Recieve data from camera 1, process it, and publish
     def callback2(self, data):
+        self.estimating = (time.time() % 5 < 2.5)
+
         self.cv_image2 = self.bridge.imgmsg_to_cv2(data, "bgr8").copy()
 
         size = (400, 400)
@@ -226,11 +232,35 @@ class image_converter:
         # joint1 = 0
         # joint4 = 0
 
-        actual_target_pos = master_positions[4]
-        test_angle = time.time()/2
+        actual_target_pos = master_positions[2]-master_positions[1]
+        test_angle = time.time()*2
 
-        joint1, joint2, joint3 = self.calculate_joint_angles(actual_target_pos, test_angle)
-        joint4 = math.pi/2 # self.angle_between_three_points(master_positions[1], master_positions[2], master_positions[3])
+        normal_1 = np.cross(master_positions[0]-master_positions[1], master_positions[1]-master_positions[2])
+        normal_2 = np.cross(master_positions[1]-master_positions[2], master_positions[2]-master_positions[3])
+        d = np.dot(normal_1, master_positions[2])
+        c = np.dot(normal_1, master_positions[3])
+
+        angle1 = (self.angle_between_two_vectors(normal_1, normal_2))
+        test1, test2 = math.copysign(1, np.dot(normal_1, normal_2)), math.copysign(1, c-d)
+        angle1 -= math.pi/2
+
+        old_angle1 = angle1
+        if test2 == 1 and old_angle1 < 0:
+            angle1 *= -1
+        if test2 == -1 and old_angle1 < 0:
+            angle1 += math.pi
+        if test2 == -1 and old_angle1 > 0:
+            angle1 += math.pi
+        if test2 == 1 and old_angle1 > 0:
+            angle1 = math.pi*2 - angle1
+
+        # test_angle = test_angle % (math.pi * 2)
+        # [-3.24 -2.28  5.1 ]
+        joint1, joint2, joint3 = self.calculate_joint_angles(actual_target_pos, angle1)
+        joint4 = math.pi-self.angle_between_three_points(master_positions[1], master_positions[2], master_positions[3])
+
+        if self.estimating:
+            self.my_estimation = (joint1, joint2, joint3, joint4)
 
         cv2.imshow('window1', np.asarray(img1))
         cv2.imshow('window2', np.asarray(img2))
@@ -245,6 +275,13 @@ class image_converter:
             self.target_x_pub.publish(master_positions[4][0])
             self.target_y_pub.publish(master_positions[4][1])
             self.target_z_pub.publish(master_positions[4][2])
+
+            if self.estimating:
+                joint1, joint2, joint3, joint4 = (1, -1, -1, -1)
+            else:
+                joint1, joint2, joint3, joint4 = self.my_estimation
+
+            print(joint1, joint2, joint3, joint4)
 
             self.robot_joint1_pub.publish(joint1)
             self.robot_joint2_pub.publish(joint2)
