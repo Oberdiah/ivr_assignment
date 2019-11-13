@@ -2,6 +2,7 @@
 # rostopic pub -1 /robot/joint2_position_controller/command std_msgs/Float64 "data: 1.0"
 import math
 import time
+from time import sleep
 
 import roslib
 import sys
@@ -14,6 +15,8 @@ from std_msgs.msg import Float64MultiArray, Float64
 from cv_bridge import CvBridge, CvBridgeError
 import pyximport; pyximport.install()
 import cython_functions
+
+
 
 class image_converter:
 
@@ -32,17 +35,30 @@ class image_converter:
 
         # initialize a publisher to send images from camera2 to a topic named image_topic2
         self.image_pub2 = rospy.Publisher("image_topic2", Image, queue_size=1)
-        # initialize a subscriber to recieve messages rom a topic named /robot/camera1/image_raw and use callback function to recieve data
+        # initialize a subscriber to recieve messages rom a topic named /robot/camera2/image_raw and use callback function to recieve data
         self.image_sub2 = rospy.Subscriber("/camera2/robot/image_raw", Image, self.callback2, queue_size=1, buff_size=2**24)
-
+		
+		#initialize publisher to send data about measured pos of the first target
         self.target_x_pub = rospy.Publisher("target_x", Float64, queue_size=1)
         self.target_y_pub = rospy.Publisher("target_y", Float64, queue_size=1)
         self.target_z_pub = rospy.Publisher("target_z", Float64, queue_size=1)
+        
+        #initialize publisher to send data about calculated pos of end effector by FK
+        self.end_effector_x_FK = rospy.Publisher("FKend_effector_x", Float64, queue_size=1)
+        self.end_effector_y_FK = rospy.Publisher("FKend_effector_y", Float64, queue_size=1)
+        self.end_effector_z_FK = rospy.Publisher("FKend_effector_z", Float64, queue_size=1)
 
+		#initialize publisher to send wanted joint angles
         self.robot_joint1_pub = rospy.Publisher("/robot/joint1_position_controller/command", Float64, queue_size=1)
         self.robot_joint2_pub = rospy.Publisher("/robot/joint2_position_controller/command", Float64, queue_size=1)
         self.robot_joint3_pub = rospy.Publisher("/robot/joint3_position_controller/command", Float64, queue_size=1)
         self.robot_joint4_pub = rospy.Publisher("/robot/joint4_position_controller/command", Float64, queue_size=1)
+        
+        #initialize publisher to send estimated joint angles
+        self.robot_joint1_est = rospy.Publisher("/robot/joint1_position_controller/estimated", Float64, queue_size=1)
+        self.robot_joint2_est = rospy.Publisher("/robot/joint2_position_controller/estimated", Float64, queue_size=1)
+        self.robot_joint3_est = rospy.Publisher("/robot/joint3_position_controller/estimated", Float64, queue_size=1)
+        self.robot_joint4_est = rospy.Publisher("/robot/joint4_position_controller/estimated", Float64, queue_size=1)
 
         # initialize the bridge between openCV and ROS
         self.bridge = CvBridge()
@@ -66,8 +82,8 @@ class image_converter:
             self.process_orange(img, orange, 16)
         ]
 
-        if img_num == 1:
-            cv2.imshow('orange target', targets[4])
+        #if img_num == 1:
+            #cv2.imshow('orange target', targets[4])
 
         positions = [0, 0, 0, 0, 0]
 
@@ -152,14 +168,23 @@ class image_converter:
     def angle_between_two_vectors(self, ba, bc):
         cosine_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
         return np.arccos(cosine_angle)
+    
+    def ForwardK (self, ja):
+		print ("angles", ja)
+		
+		end_effector = np.array([-2*(np.sin(ja[0])*np.sin(ja[1])*np.cos(ja[2])-np.sin(ja[2])*np.cos(ja[0]))*np.cos(ja[3])+2*np.sin(ja[0])*np.cos(ja[1])*np.sin(ja[3])-3*(np.sin(ja[0])*np.sin(ja[1])*np.cos(ja[2])-np.sin(ja[2])*np.cos(ja[0])) , 2*(np.cos(ja[0])*np.sin(ja[1])*np.cos(ja[2])-np.sin(ja[1])*np.sin(ja[2]))*np.cos(ja[3])-2*np.cos(ja[0])*np.cos(ja[1])*np.sin(ja[3])+3*(np.cos(ja[0])*np.sin(ja[1])*np.cos(ja[2])-np.sin(ja[2])*np.sin(ja[1])) , 2*(np.cos(ja[1])*np.cos(ja[2])*np.cos(ja[3])+2*np.sin(ja[1])*np.sin(ja[3]))+3*np.cos(ja[2])*np.cos(ja[1])+2])
+		
+		return end_effector
 
     # Recieve data and save it for camera 1's callback.
     def callback1(self, data):
+    	sleep(0.5)
         self.cv_image1 = self.bridge.imgmsg_to_cv2(data, "bgr8").copy()
 
     # Recieve data from camera 1, process it, and publish
     def callback2(self, data):
         self.estimating = (time.time() % 5 < 2.5)
+        sleep(0.5)
 
         self.cv_image2 = self.bridge.imgmsg_to_cv2(data, "bgr8").copy()
 
@@ -214,12 +239,14 @@ class image_converter:
 
         # Convert pixel distances into real world distances
         master_positions /= 25
-
+                
         for i in range(5):
             # Since the y coordinate of the images is flipped, we need to flip it again to
             # get back to sensible real world results.
             master_positions[i][2] *= -1
             master_positions[i] += yellow_sphere_location
+            
+        print ("end effector measured :", master_positions[3])
 
             # This helps the calculations be more accurate, but can't be justified so it's unused
             # master_positions[i][1] *= 4.0/5
@@ -272,7 +299,7 @@ class image_converter:
             self.image_pub1.publish(self.bridge.cv2_to_imgmsg(img1, "bgr8"))
             self.image_pub2.publish(self.bridge.cv2_to_imgmsg(img2, "bgr8"))
 
-            self.target_x_pub.publish(master_positions[4][0])
+            """self.target_x_pub.publish(master_positions[4][0])
             self.target_y_pub.publish(master_positions[4][1])
             self.target_z_pub.publish(master_positions[4][2])
 
@@ -281,15 +308,29 @@ class image_converter:
             else:
                 joint1, joint2, joint3, joint4 = self.my_estimation
 
-            print(joint1, joint2, joint3, joint4)
+            #print(joint1, joint2, joint3, joint4)
 
-            self.robot_joint1_pub.publish(joint1)
-            self.robot_joint2_pub.publish(joint2)
-            self.robot_joint3_pub.publish(joint3)
-            self.robot_joint4_pub.publish(joint4)
+            self.robot_joint1_pub.publish(0)
+            self.robot_joint2_pub.publish(1.57)
+            self.robot_joint3_pub.publish(0)
+            self.robot_joint4_pub.publish(0)
+           
+            #send the estimated joint angles to a topic, to be able to compare it with the command
+            self.robot_joint1_est.publish(joint1)
+            self.robot_joint2_est.publish(joint2)
+            self.robot_joint3_est.publish(joint3)
+            self.robot_joint4_est.publish(joint4)
+                        
+            end_effector_pos=self.ForwardK(np.array([0,1.57,0,0]))
+            print ("end effector pos",  end_effector_pos)
+            #publish the results in a topic to plot it afterwards
+            self.end_effector_x_FK.publish(end_effector_pos[0])
+            self.end_effector_y_FK.publish(end_effector_pos[1])
+            self.end_effector_z_FK.publish(end_effector_pos[2])"""
+           	
         except CvBridgeError as e:
             print(e)
-
+	
 
 # call the class
 def main(args):
