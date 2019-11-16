@@ -54,7 +54,7 @@ class image_converter:
         self.end_effector_x_FK = rospy.Publisher("FKend_effector_x", Float64, queue_size=1)
         self.end_effector_y_FK = rospy.Publisher("FKend_effector_y", Float64, queue_size=1)
         self.end_effector_z_FK = rospy.Publisher("FKend_effector_z", Float64, queue_size=1)"""
-
+        
 		#initialize publisher to send desired joint angles
         self.robot_joint1_pub = rospy.Publisher("/robot/joint1_position_controller/command", Float64, queue_size=1)
         self.robot_joint2_pub = rospy.Publisher("/robot/joint2_position_controller/command", Float64, queue_size=1)
@@ -198,11 +198,13 @@ class image_converter:
         J4 = np.array([-2*np.sin(q[3])*(np.sin(q[0])*np.sin(q[1])*np.cos(q[2]) + np.sin(q[2])*np.cos(q[0])) + 2*np.sin(q[0])*np.cos(q[1])*np.cos(q[3]) 
                     ,2*np.sin(q[3])*(np.cos(q[0])*np.sin(q[1])*np.cos(q[2]) - np.sin(q[1])*np.sin(q[2])) - 2*np.cos(q[0])*np.cos(q[1])*np.cos(q[3]) 
                     ,-2*(np.cos(q[1])*np.cos(q[2])*np.sin(q[3]) + np.sin(q[1])*np.cos(q[3]))])
-        Jacobian = np.array([J1,J2,J3,J4]).transpose()
+        Jacobian = np.array([J1,J3,J4]).transpose()
         return Jacobian
 
       # Estimate control inputs for open-loop control, with q the estimation of the set of input angles, and pos_d the desired position
     def open_loop_control(self,q,pos_d):
+    	# set of angles that will be controlled, i.e without angle 2
+    	q_c = np.array([q[0],q[2],q[3]])
         # estimate time step
         cur_time = np.array([rospy.get_time()])
         dt = cur_time - self.time_previous_step2
@@ -211,15 +213,17 @@ class image_converter:
         # estimate derivative of desired trajectory
         self.d_error = (pos_d - self.error)/dt
         self.error = pos_d
-        q_d = q + (dt * np.dot(J_inv, self.d_error.transpose()))  # desired joint angles to follow the trajectory
+        q_d = q_c + (dt * np.dot(J_inv, self.d_error.transpose()))  # desired joint angles to follow the trajectory
         return q_d
 
       # Estimate control inputs for closed-loop control, with q input angles, pos_d the desired position and pos_c the current position
     def closed_loop_control(self,q,pos_c,pos_d):
+    	# set of angles that will be controlled, i.e without angle 2
+    	q_c = np.array([q[0],q[2],q[3]])
         # P gain
-        K_p = np.array([[1,0,0],[0,1,0],[0,0,1]])
+        K_p = np.array([[2,0,0],[0,2,0],[0,0,2]])
         # D gain
-        K_d = np.array([[0.1,0,0],[0,0.1,0],[0,0,0.1]])
+        K_d = np.array([[0.01,0,0],[0,0.01,0],[0,0,0.01]])
         # currently there is no K_i used
         # estimate time step
         cur_time = np.array([rospy.get_time()])
@@ -230,9 +234,8 @@ class image_converter:
         # estimate error
         self.error = pos_d-pos_c
         J_inv = np.linalg.pinv(self.calculate_jacobian(q))  # calculating the psudeo inverse of Jacobian
-        print (J_inv.shape,K_d.shape, self.d_error.shape, self.error.shape)
         dq_d =np.dot(J_inv, (np.dot(K_d,self.d_error.transpose()) + np.dot(K_p,self.error.transpose()) ) )  # control input (angular velocity of joints)
-        q_d = q + (dt * dq_d)  # control input (angular position of joints)
+        q_d = q_c + (dt * dq_d)  # control input (angular position of joints)
         return q_d
 
     # Recieve data and save it for camera 1's callback.
@@ -355,7 +358,7 @@ class image_converter:
         q = np.array([joint1, joint2, joint3, joint4])
         end_effector_pos= self.ForwardK(q)
         #q = np.array([2.5,1.3,0.1,0.2])
-        target_p = np.array([master_positions[4][0],master_positions[4][1],master_positions[4][2]])
+        target_p = master_positions[4]
         # send control commands to joints
         q_d = self.closed_loop_control(q,end_effector_pos,target_p)
         #q_d = self.open_loop_control(q,target_p)
@@ -372,9 +375,9 @@ class image_converter:
            
             #send the desired angles to the robot so that it can follow the target
             self.robot_joint1_pub.publish(q_d[0])
-            self.robot_joint2_pub.publish(q_d[1])
-            self.robot_joint3_pub.publish(q_d[2])
-            self.robot_joint4_pub.publish(q_d[3])
+            self.robot_joint2_pub.publish(1)	#angle 2 is fixed to reduce the number of solution to just one
+            self.robot_joint3_pub.publish(q_d[1])
+            self.robot_joint4_pub.publish(q_d[2])
            
             #send the estimated joint angles to a topic, to be able to compare it with the command
             """ self.robot_joint1_est.publish(joint1)
@@ -382,7 +385,7 @@ class image_converter:
             self.robot_joint3_est.publish(joint3)
             self.robot_joint4_est.publish(joint4)"""
                         
-            print ("end effector measured :", master_positions[3])
+            print ("Target measured :", master_positions[4])
             print ("end effector pos",  end_effector_pos)
             print ("\n")
             """#publish the results in a topic to plot it afterwards
