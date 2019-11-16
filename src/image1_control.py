@@ -27,7 +27,7 @@ class image_converter:
 
         # initialize the node named image_processing
         rospy.init_node('image_processing', anonymous=True)
-
+        #self.rate = rospy.Rate(0.5) # 0.5hz frequenct (sampling time)
         # initialize a publisher to send images from camera1 to a topic named image_topic1
         self.image_pub1 = rospy.Publisher("image_topic1", Image, queue_size=1)
         # initialize a subscriber to recieve messages rom a topic named /robot/camera1/image_raw and use callback function to recieve data
@@ -179,17 +179,18 @@ class image_converter:
 
     #calculate the forward kinematics equation, q is an array of the input angles    
     def ForwardK (self, q):
-		end_effector = np.array([2*(np.sin(q[0])*np.sin(q[1])*np.cos(q[2]) + np.sin(q[2])*np.cos(q[0]))*np.cos(q[3]) + 2*np.sin(q[0])*np.cos(q[1])*np.sin(q[3]) + 3*(np.sin(q[0])*np.sin(q[1])*np.cos(q[2]) + np.sin(q[2])*np.cos(q[0])) ,2*(-np.cos(q[0])*np.sin(q[1])*np.cos(q[2]) + np.sin(q[1])*np.sin(q[2]))*np.cos(q[3]) - 2*np.cos(q[0])*np.cos(q[1])*np.sin(q[3]) + 3*(-np.cos(q[0])*np.sin(q[1])*np.cos(q[2]) + np.sin(q[2])*np.sin(q[1])) ,2*(np.cos(q[1])*np.cos(q[2])*np.cos(q[3]) - 2*np.sin(q[1])*np.sin(q[3])) + 3*np.cos(q[2])*np.cos(q[1]) + 2])
+		end_effector = np.array([2*(np.sin(q[0])*np.sin(q[1])*np.cos(q[2]) + np.sin(q[2])*np.cos(q[0]))*np.cos(q[3]) + 2*np.sin(q[0])*np.cos(q[1])*np.sin(q[3]) + 3*(np.sin(q[0])*np.sin(q[1])*np.cos(q[2]) + np.sin(q[2])*np.cos(q[0])) ,-2*(np.cos(q[0])*np.sin(q[1])*np.cos(q[2]) - np.sin(q[0])*np.sin(q[2]))*np.cos(q[3]) - 2*np.cos(q[0])*np.cos(q[1])*np.sin(q[3]) + 3*(-np.cos(q[0])*np.sin(q[1])*np.cos(q[2]) + np.sin(q[2])*np.sin(q[0])) ,2*np.cos(q[1])*np.cos(q[2])*np.cos(q[3]) - 2*np.sin(q[1])*np.sin(q[3]) + 3*np.cos(q[2])*np.cos(q[1]) + 2])
 		return end_effector
+		
 
      # Calculate the robot Jacobian
     def calculate_jacobian(self,q):
         #because it is very big matrix, I choose to simply the writing by columns : [J1, J2, J3, J4]
         J1 = np.array([2*np.cos(q[3])*(np.cos(q[0])*np.sin(q[1])*np.cos(q[2]) - np.sin(q[2])*np.sin(q[0])) + 2*np.cos(q[0])*np.cos(q[1])*np.sin(q[3]) + 3*(np.cos(q[0])*np.sin(q[1])*np.cos(q[2]) - np.sin(q[2])*np.sin(q[0]))
-                    ,2*(np.cos(q[3])*np.sin(q[0])*np.sin(q[1])*np.cos(q[2]) + np.sin(q[0])*np.cos(q[1])*np.sin(q[3])) + 3*np.sin(q[0])*np.sin(q[1])*np.cos(q[2])
+                    ,2*(np.cos(q[3])*np.sin(q[0])*np.sin(q[1])*np.cos(q[2]) + np.sin(q[0])*np.cos(q[1])*np.sin(q[3]) + np.cos(q[0])*np.sin(q[2])*np.cos(q[3])) + 3*(np.sin(q[0])*np.sin(q[1])*np.cos(q[2]) + np.cos(q[0])*np.sin(q[2]))
                     ,0])
         J2 = np.array([2*np.cos(q[3])*np.sin(q[0])*np.cos(q[1])*np.cos(q[2]) - 2*np.sin(q[0])*np.sin(q[1])*np.sin(q[3]) + 3*np.sin(q[0])*np.cos(q[1])*np.cos(q[2])
-                    ,2*np.cos(q[3])*(np.cos(q[1])*np.sin(q[2])-np.cos(q[0])*np.cos(q[1])*np.cos(q[2])) + 2*np.cos(q[0])*np.sin(q[1])*np.sin(q[3]) + 3*(np.sin(q[2])*np.sin(q[1]) - np.cos(q[0])*np.cos(q[1])*np.cos(q[2])) 
+                    ,-2*np.cos(q[3])*np.cos(q[0])*np.cos(q[1])*np.cos(q[2]) + 2*np.cos(q[0])*np.sin(q[1])*np.sin(q[3]) - 3*np.cos(q[0])*np.cos(q[1])*np.cos(q[2]) 
                     ,-2*np.sin(q[1])*np.cos(q[2])*np.cos(q[3]) - 2*np.cos(q[1])*np.sin(q[3]) - 3*np.cos(q[2])*np.sin(q[1])])
         J3 = np.array([2*np.cos(q[3])*(-np.sin(q[0])*np.sin(q[1])*np.sin(q[2]) + np.cos(q[2])*np.cos(q[1])) - 3*np.sin(q[0])*np.sin(q[1])*np.sin(q[2]) + 3*np.cos(q[2])*np.cos(q[0]) 
                     ,2*np.cos(q[3])*(np.cos(q[0])*np.sin(q[1])*np.sin(q[2]) + np.sin(q[1])*np.cos(q[2])) + 3*(np.cos(q[0])*np.sin(q[1])*np.sin(q[2]) + np.cos(q[2])*np.sin(q[1])) 
@@ -236,13 +237,11 @@ class image_converter:
 
     # Recieve data and save it for camera 1's callback.
     def callback1(self, data):
-    	sleep(0.5)
         self.cv_image1 = self.bridge.imgmsg_to_cv2(data, "bgr8").copy()
 
     # Recieve data from camera 1, process it, and publish
     def callback2(self, data):
         self.estimating = (time.time() % 5 < 2.5)
-        sleep(0.5)
 
         self.cv_image2 = self.bridge.imgmsg_to_cv2(data, "bgr8").copy()
 
@@ -304,7 +303,7 @@ class image_converter:
             master_positions[i][2] *= -1
             master_positions[i] += yellow_sphere_location
             
-        print ("end effector measured :", master_positions[3])
+        
 
             # This helps the calculations be more accurate, but can't be justified so it's unused
             # master_positions[i][1] *= 4.0/5
@@ -353,13 +352,15 @@ class image_converter:
         cv2.waitKey(1)
 
         #estimated current set of angles
-        q = np.array([0.2, 0.1, 0.4, 1])
-       
-        # send control commands to joints (lab 3)
-       # q_d = self.closed_loop_control(q,end_effector_pos,np.array([2,1,3]))
-        q_d = np.dot (np.linalg.pinv(self.calculate_jacobian(q)),np.array([2,1,3]) )
+        q = np.array([joint1, joint2, joint3, joint4])
         end_effector_pos= self.ForwardK(q)
-        sleep(1)
+        #q = np.array([2.5,1.3,0.1,0.2])
+        target_p = np.array([master_positions[4][0],master_positions[4][1],master_positions[4][2]])
+        # send control commands to joints
+        q_d = self.closed_loop_control(q,end_effector_pos,target_p)
+        #q_d = self.open_loop_control(q,target_p)
+        
+        
         # Publish the results
         try:
             self.image_pub1.publish(self.bridge.cv2_to_imgmsg(img1, "bgr8"))
@@ -370,24 +371,27 @@ class image_converter:
             self.target_z_pub.publish(master_positions[4][2])
            
             #send the desired angles to the robot so that it can follow the target
-            self.robot_joint1_pub.publish(q [0])
-            self.robot_joint2_pub.publish(q [1])
-            self.robot_joint3_pub.publish(q [2])
-            self.robot_joint4_pub.publish(q [3])
+            self.robot_joint1_pub.publish(q_d[0])
+            self.robot_joint2_pub.publish(q_d[1])
+            self.robot_joint3_pub.publish(q_d[2])
+            self.robot_joint4_pub.publish(q_d[3])
            
             #send the estimated joint angles to a topic, to be able to compare it with the command
-            self.robot_joint1_est.publish(joint1)
+            """ self.robot_joint1_est.publish(joint1)
             self.robot_joint2_est.publish(joint2)
             self.robot_joint3_est.publish(joint3)
-            self.robot_joint4_est.publish(joint4)
+            self.robot_joint4_est.publish(joint4)"""
                         
-            
+            print ("end effector measured :", master_positions[3])
             print ("end effector pos",  end_effector_pos)
+            print ("\n")
             """#publish the results in a topic to plot it afterwards
             self.end_effector_x_FK.publish(end_effector_pos[0])
             self.end_effector_y_FK.publish(end_effector_pos[1])
             self.end_effector_z_FK.publish(end_effector_pos[2])"""
            	
+            #self.rate.sleep()
+            
         except CvBridgeError as e:
             print(e)
 	
