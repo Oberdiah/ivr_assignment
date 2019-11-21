@@ -1,9 +1,8 @@
 #!/usr/bin/env python
 # rostopic pub -1 /robot/joint2_position_controller/command std_msgs/Float64 "data: 1.0"
+
 import math
 import time
-from time import sleep
-
 import roslib
 import sys
 import rospy
@@ -16,8 +15,6 @@ from cv_bridge import CvBridge, CvBridgeError
 import pyximport; pyximport.install()
 import cython_functions
 
-
-
 class image_converter:
 
     # Defines publisher and subscriber
@@ -27,7 +24,6 @@ class image_converter:
 
         # initialize the node named image_processing
         rospy.init_node('image_processing', anonymous=True)
-
         # initialize a publisher to send images from camera1 to a topic named image_topic1
         self.image_pub1 = rospy.Publisher("image_topic1", Image, queue_size=1)
         # initialize a subscriber to recieve messages rom a topic named /robot/camera1/image_raw and use callback function to recieve data
@@ -37,8 +33,19 @@ class image_converter:
         self.image_pub2 = rospy.Publisher("image_topic2", Image, queue_size=1)
         # initialize a subscriber to recieve messages rom a topic named /robot/camera2/image_raw and use callback function to recieve data
         self.image_sub2 = rospy.Subscriber("/camera2/robot/image_raw", Image, self.callback2, queue_size=1, buff_size=2**24)
-		
-		#initialize publisher to send data about measured pos of the first target
+
+        # initialize the bridge between openCV and ROS
+        self.bridge = CvBridge()
+
+        # initialize time variables for the closed control part
+        self.time_previous_step = np.array([rospy.get_time()], dtype='float64')     
+        self.time_previous_step2 = np.array([rospy.get_time()], dtype='float64')   
+        # initialize error and derivative of error for trajectory tracking  
+        self.error = np.array([[0.0,0.0,0.0]], dtype='float64')  
+        self.d_error = np.array([[0.0,0.0,0.0]], dtype='float64')
+        self.d2_error = np.array([[0.0,0.0,0.0]], dtype='float64')
+    
+        #initialize publisher to send data about measured pos of the first target
         self.target_x_pub = rospy.Publisher("target_x", Float64, queue_size=1)
         self.target_y_pub = rospy.Publisher("target_y", Float64, queue_size=1)
         self.target_z_pub = rospy.Publisher("target_z", Float64, queue_size=1)
@@ -47,21 +54,22 @@ class image_converter:
         self.end_effector_x_FK = rospy.Publisher("FKend_effector_x", Float64, queue_size=1)
         self.end_effector_y_FK = rospy.Publisher("FKend_effector_y", Float64, queue_size=1)
         self.end_effector_z_FK = rospy.Publisher("FKend_effector_z", Float64, queue_size=1)
-
-		#initialize publisher to send wanted joint angles
+        
+        #initialize publisher to send desired joint angles
         self.robot_joint1_pub = rospy.Publisher("/robot/joint1_position_controller/command", Float64, queue_size=1)
         self.robot_joint2_pub = rospy.Publisher("/robot/joint2_position_controller/command", Float64, queue_size=1)
         self.robot_joint3_pub = rospy.Publisher("/robot/joint3_position_controller/command", Float64, queue_size=1)
         self.robot_joint4_pub = rospy.Publisher("/robot/joint4_position_controller/command", Float64, queue_size=1)
         
-        #initialize publisher to send estimated joint angles
+        """#initialize publisher to send estimated joint angles
         self.robot_joint1_est = rospy.Publisher("/robot/joint1_position_controller/estimated", Float64, queue_size=1)
         self.robot_joint2_est = rospy.Publisher("/robot/joint2_position_controller/estimated", Float64, queue_size=1)
         self.robot_joint3_est = rospy.Publisher("/robot/joint3_position_controller/estimated", Float64, queue_size=1)
-        self.robot_joint4_est = rospy.Publisher("/robot/joint4_position_controller/estimated", Float64, queue_size=1)
+        self.robot_joint4_est = rospy.Publisher("/robot/joint4_position_controller/estimated", Float64, queue_size=1)"""
 
-        # initialize the bridge between openCV and ROS
-        self.bridge = CvBridge()
+        #initialize the angles command
+        self.q_d = np.array([0,1,0,0])
+
 
     def get_positions(self, img, img_num):
         img = img.copy()
@@ -153,10 +161,10 @@ class image_converter:
         c = math.cos(test_angle + math.pi * 3 / 4)
         s = math.sin(test_angle + math.pi * 3 / 4)
         target_pos = [c - s, s + c, actual_target_pos[2]]
-        joint2 = -math.atan(target_pos[1] / target_pos[2])
+        joint2 = -math.atan2(target_pos[1], target_pos[2])
         target_pos_magnitude = math.sqrt(target_pos[2] * target_pos[2] + target_pos[1] * target_pos[1])
         transformed_target_pos = [target_pos[0], target_pos_magnitude * math.copysign(1, target_pos[1]), 0]
-        joint3 = math.atan(transformed_target_pos[0] / transformed_target_pos[1])
+        joint3 = math.atan2(transformed_target_pos[0], transformed_target_pos[1])
 
         return joint1, joint2, joint3
 
@@ -168,23 +176,85 @@ class image_converter:
     def angle_between_two_vectors(self, ba, bc):
         cosine_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
         return np.arccos(cosine_angle)
-    
-    def ForwardK (self, ja):
-		print ("angles", ja)
-		
-		end_effector = np.array([-2*(np.sin(ja[0])*np.sin(ja[1])*np.cos(ja[2])-np.sin(ja[2])*np.cos(ja[0]))*np.cos(ja[3])+2*np.sin(ja[0])*np.cos(ja[1])*np.sin(ja[3])-3*(np.sin(ja[0])*np.sin(ja[1])*np.cos(ja[2])-np.sin(ja[2])*np.cos(ja[0])) , 2*(np.cos(ja[0])*np.sin(ja[1])*np.cos(ja[2])-np.sin(ja[1])*np.sin(ja[2]))*np.cos(ja[3])-2*np.cos(ja[0])*np.cos(ja[1])*np.sin(ja[3])+3*(np.cos(ja[0])*np.sin(ja[1])*np.cos(ja[2])-np.sin(ja[2])*np.sin(ja[1])) , 2*(np.cos(ja[1])*np.cos(ja[2])*np.cos(ja[3])+2*np.sin(ja[1])*np.sin(ja[3]))+3*np.cos(ja[2])*np.cos(ja[1])+2])
-		
-		return end_effector
+        
+
+    #calculate the forward kinematics equations, q is an array of the input angles, return the coordinates of the end effector    
+    def ForwardK (self, q):
+        end_effector = np.array([2*(np.sin(q[0])*np.sin(q[1])*np.cos(q[2]) + np.sin(q[2])*np.cos(q[0]))*np.cos(q[3]) + 2*np.sin(q[0])*np.cos(q[1])*np.sin(q[3]) + 3*(np.sin(q[0])*np.sin(q[1])*np.cos(q[2]) + np.sin(q[2])*np.cos(q[0])) ,-2*(np.cos(q[0])*np.sin(q[1])*np.cos(q[2]) - np.sin(q[0])*np.sin(q[2]))*np.cos(q[3]) - 2*np.cos(q[0])*np.cos(q[1])*np.sin(q[3]) + 3*(-np.cos(q[0])*np.sin(q[1])*np.cos(q[2]) + np.sin(q[2])*np.sin(q[0])) ,2*np.cos(q[1])*np.cos(q[2])*np.cos(q[3]) - 2*np.sin(q[1])*np.sin(q[3]) + 3*np.cos(q[2])*np.cos(q[1]) + 2])
+        return end_effector
+        
+
+     # Calculate the robot Jacobian
+    def calculate_jacobian(self,q):
+        #because it is very big matrix, we chose to simplify by writing columns by columns : [J1, J2, J3, J4]
+        J1 = np.array([2*np.cos(q[3])*(np.cos(q[0])*np.sin(q[1])*np.cos(q[2]) - np.sin(q[2])*np.sin(q[0])) + 2*np.cos(q[0])*np.cos(q[1])*np.sin(q[3]) + 3*(np.cos(q[0])*np.sin(q[1])*np.cos(q[2]) - np.sin(q[2])*np.sin(q[0]))
+                    ,2*(np.cos(q[3])*np.sin(q[0])*np.sin(q[1])*np.cos(q[2]) + np.sin(q[0])*np.cos(q[1])*np.sin(q[3]) + np.cos(q[0])*np.sin(q[2])*np.cos(q[3])) + 3*(np.sin(q[0])*np.sin(q[1])*np.cos(q[2]) + np.cos(q[0])*np.sin(q[2]))
+                    ,0])
+        J2 = np.array([2*np.cos(q[3])*np.sin(q[0])*np.cos(q[1])*np.cos(q[2]) - 2*np.sin(q[0])*np.sin(q[1])*np.sin(q[3]) + 3*np.sin(q[0])*np.cos(q[1])*np.cos(q[2])
+                    ,-2*np.cos(q[3])*np.cos(q[0])*np.cos(q[1])*np.cos(q[2]) + 2*np.cos(q[0])*np.sin(q[1])*np.sin(q[3]) - 3*np.cos(q[0])*np.cos(q[1])*np.cos(q[2])
+                    ,-2*np.sin(q[1])*np.cos(q[2])*np.cos(q[3]) - 2*np.cos(q[1])*np.sin(q[3]) - 3*np.cos(q[2])*np.sin(q[1])])
+        J3 = np.array([2*np.cos(q[3])*(-np.sin(q[0])*np.sin(q[1])*np.sin(q[2]) + np.cos(q[2])*np.cos(q[1])) - 3*np.sin(q[0])*np.sin(q[1])*np.sin(q[2]) + 3*np.cos(q[2])*np.cos(q[0])
+                    ,2*np.cos(q[3])*(np.cos(q[0])*np.sin(q[1])*np.sin(q[2]) + np.sin(q[0])*np.cos(q[2])) + 3*(np.cos(q[0])*np.sin(q[1])*np.sin(q[2]) + np.cos(q[2])*np.sin(q[0]))
+                    ,-2*np.cos(q[1])*np.sin(q[2])*np.cos(q[3]) - 3*np.sin(q[2])*np.cos(q[1])])
+        J4 = np.array([-2*np.sin(q[3])*(np.sin(q[0])*np.sin(q[1])*np.cos(q[2]) + np.sin(q[2])*np.cos(q[0])) + 2*np.sin(q[0])*np.cos(q[1])*np.cos(q[3])
+                    ,2*np.sin(q[3])*(np.cos(q[0])*np.sin(q[1])*np.cos(q[2]) - np.sin(q[0])*np.sin(q[2])) - 2*np.cos(q[0])*np.cos(q[1])*np.cos(q[3])
+                    ,-2*(np.cos(q[1])*np.cos(q[2])*np.sin(q[3]) + np.sin(q[1])*np.cos(q[3]))])
+        Jacobian = np.array([J1,J2,J3,J4]).transpose()  #transpose because J1 to J4 are initially lines, we want them as columns
+        return Jacobian
+
+      # Estimate control inputs for open-loop control, with q the estimation of the set of input angles, and pos_d the desired position, used for development purposes
+    def open_loop_control(self,q,pos_d):
+        # estimate time step
+        cur_time = np.array([rospy.get_time()])
+        dt = self.time_previous_step2 - cur_time
+        self.time_previous_step2 = cur_time
+        J_inv = np.linalg.pinv(self.calculate_jacobian(q))  # calculating the pseudo inverse of Jacobian
+        # estimate derivative of desired trajectory
+        self.d_error = (pos_d - self.error)/dt
+        self.error = pos_d
+        q_d = q + (dt * np.dot(J_inv, self.d_error.transpose()))  # desired joint angles to follow the trajectory
+        return q_d
+
+      # Estimate control inputs for closed-loop control, with q input angles, pos_d the desired position and pos_c the current position
+    def closed_loop_control(self,q,pos_c,pos_d):
+        #P parameters
+        Kp = np.array([[10,0,0],[0,10,0],[0,0,10]])
+        dt=0.005
+        self.d_error = ((pos_d - pos_c) - self.error)/dt
+        self.error = pos_d-pos_c
+        J_inv =self.calculate_jacobian(q).transpose()
+        # calculating an approximation of the psudeo inverse of Jacobian
+        dq_d =np.dot(J_inv, (np.dot(Kp,self.error.transpose()) ) )
+        q_d = (q + (dt * dq_d))  # control input (angular position of joints)
+        return q_d
+
+    # Estimate control inputs for closed-loop control, with q input angles, pos_d the desired position and pos_c the current position
+    #second version, with defects but makes more sense to me
+    def closed_loop_control2(self,q,pos_c,pos_d):
+        #PI parameters
+        Kp = np.array([[0.5,0,0],[0,0.5,0],[0,0,0.5]])
+       	Kd = np.array([[0.005,0,0],[0,0.005,0],[0,0,0.005]])
+        # estimate time step
+        cur_time = np.array([rospy.get_time()])
+        dt = self.time_previous_step - cur_time
+        self.time_previous_step = cur_time
+        # estimate the position's velocity error and the derivative of it
+        self.d2_error = ((pos_d-pos_c)/dt -self.d_error)/dt
+        self.d_error = (pos_d-pos_c)/dt
+        # calculating the psudeo inverse of Jacobian
+        J_inv =np.linalg.pinv(self.calculate_jacobian(q))
+        #calculating the new joint angle velocity 
+        dq_d =np.dot(J_inv, (np.dot(Kp,self.d_error.transpose()) + np.dot(Kd,self.d2_error.transpose()) ) )
+        q_d = (q + (dt * dq_d))  # the joint angle velocity is now converted into a small variation in joint angle input
+        return q_d
 
     # Recieve data and save it for camera 1's callback.
     def callback1(self, data):
-    	sleep(0.5)
         self.cv_image1 = self.bridge.imgmsg_to_cv2(data, "bgr8").copy()
 
     # Recieve data from camera 1, process it, and publish
     def callback2(self, data):
         self.estimating = (time.time() % 5 < 2.5)
-        sleep(0.5)
 
         self.cv_image2 = self.bridge.imgmsg_to_cv2(data, "bgr8").copy()
 
@@ -239,14 +309,14 @@ class image_converter:
 
         # Convert pixel distances into real world distances
         master_positions /= 25
-                
+
         for i in range(5):
             # Since the y coordinate of the images is flipped, we need to flip it again to
             # get back to sensible real world results.
             master_positions[i][2] *= -1
             master_positions[i] += yellow_sphere_location
-            
-        print ("end effector measured :", master_positions[3])
+
+
 
             # This helps the calculations be more accurate, but can't be justified so it's unused
             # master_positions[i][1] *= 4.0/5
@@ -294,46 +364,60 @@ class image_converter:
 
         cv2.waitKey(1)
 
+        #current set of angles
+        q = np.array(self.q_d)
+        #Current position of the end_effector
+        end_effector_pos = self.ForwardK(q)
+        #position of the target
+        target_p = master_positions[4]
+        # find joints angle command
+        # self.q_d = self.open_loop_control(q,np.array(target_p))
+        #self.q_d = self.closed_loop_control(q,end_effector_pos, target_p)
+        #other kind of closed control : the angle are not within range but the theoritical end effector position is quite good (with defects)
+       	self.q_d = self.closed_loop_control2(q,end_effector_pos, target_p)
+        print(self.q_d)
+
+
+
         # Publish the results
         try:
             self.image_pub1.publish(self.bridge.cv2_to_imgmsg(img1, "bgr8"))
             self.image_pub2.publish(self.bridge.cv2_to_imgmsg(img2, "bgr8"))
 
-            """self.target_x_pub.publish(master_positions[4][0])
+            #publish the estimated position of the target
+            self.target_x_pub.publish(master_positions[4][0])
             self.target_y_pub.publish(master_positions[4][1])
             self.target_z_pub.publish(master_positions[4][2])
 
-            if self.estimating:
-                joint1, joint2, joint3, joint4 = (1, -1, -1, -1)
-            else:
-                joint1, joint2, joint3, joint4 = self.my_estimation
+            #send the desired angles to the robot so that it can follow the target
+            self.robot_joint1_pub.publish(self.q_d[0])
+            self.robot_joint2_pub.publish(self.q_d[1])
+            self.robot_joint3_pub.publish(self.q_d[2])
+            self.robot_joint4_pub.publish(self.q_d[3])
 
-            #print(joint1, joint2, joint3, joint4)
-
-            self.robot_joint1_pub.publish(0)
-            self.robot_joint2_pub.publish(1.57)
-            self.robot_joint3_pub.publish(0)
-            self.robot_joint4_pub.publish(0)
-           
             #send the estimated joint angles to a topic, to be able to compare it with the command
-            self.robot_joint1_est.publish(joint1)
+            """ self.robot_joint1_est.publish(joint1)
             self.robot_joint2_est.publish(joint2)
             self.robot_joint3_est.publish(joint3)
-            self.robot_joint4_est.publish(joint4)
-                        
-            end_effector_pos=self.ForwardK(np.array([0,1.57,0,0]))
+            self.robot_joint4_est.publish(joint4)"""
+
+            print ("Target measured :", master_positions[4])
             print ("end effector pos",  end_effector_pos)
-            #publish the results in a topic to plot it afterwards
+            print ("\n")
+
+            #publish the results of the FK equations in a topic to plot it afterwards
             self.end_effector_x_FK.publish(end_effector_pos[0])
             self.end_effector_y_FK.publish(end_effector_pos[1])
-            self.end_effector_z_FK.publish(end_effector_pos[2])"""
-           	
+            self.end_effector_z_FK.publish(end_effector_pos[2])
+
+
         except CvBridgeError as e:
             print(e)
-	
+    
 
 # call the class
 def main(args):
+    
     ic = image_converter()
     try:
         rospy.spin()
