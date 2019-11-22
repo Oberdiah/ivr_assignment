@@ -38,6 +38,7 @@ class image_converter:
         self.bridge = CvBridge()
 
         # initialize time variables for the closed control part
+
         self.time_previous_step = np.array([rospy.get_time()], dtype='float64')     
         self.time_previous_step2 = np.array([rospy.get_time()], dtype='float64')   
         # initialize error and derivative of error for trajectory tracking  
@@ -60,41 +61,35 @@ class image_converter:
         self.robot_joint2_pub = rospy.Publisher("/robot/joint2_position_controller/command", Float64, queue_size=1)
         self.robot_joint3_pub = rospy.Publisher("/robot/joint3_position_controller/command", Float64, queue_size=1)
         self.robot_joint4_pub = rospy.Publisher("/robot/joint4_position_controller/command", Float64, queue_size=1)
-        
-        """#initialize publisher to send estimated joint angles
-        self.robot_joint1_est = rospy.Publisher("/robot/joint1_position_controller/estimated", Float64, queue_size=1)
-        self.robot_joint2_est = rospy.Publisher("/robot/joint2_position_controller/estimated", Float64, queue_size=1)
-        self.robot_joint3_est = rospy.Publisher("/robot/joint3_position_controller/estimated", Float64, queue_size=1)
-        self.robot_joint4_est = rospy.Publisher("/robot/joint4_position_controller/estimated", Float64, queue_size=1)"""
 
         #initialize the angles command
         self.q_d = np.array([0,1,0,0])
 
-
-    def get_positions(self, img, img_num):
+    # Estimates the positions in 2D space of all the targets.
+    def get_positions(self, img):
         img = img.copy()
         cython_functions.remove_greyscale(img)
         cython_functions.saturate(img)
 
+        # The colour specified.
         yellow = np.array([0, 255, 255])
         blue = np.array([255, 0, 0])
         green = np.array([0, 255, 0])
         red = np.array([0, 0, 255])
         orange = np.array([108, 196, 253])
 
+        # Process the images to extract only the desired colours.
         targets = [
-            self.process_color(img, yellow, 5),
-            self.process_color(img, blue, 5),
-            self.process_color(img, green, 5),
-            self.process_color(img, red, 5),
+            self.process_colour(img, yellow, 5),
+            self.process_colour(img, blue, 5),
+            self.process_colour(img, green, 5),
+            self.process_colour(img, red, 5),
             self.process_orange(img, orange, 16)
         ]
 
-        #if img_num == 1:
-            #cv2.imshow('orange target', targets[4])
-
         positions = [0, 0, 0, 0, 0]
 
+        # Find the average coordinates of the images.
         for i in range(5):
             M = cv2.moments(targets[i])
             if M['m00'] == 0:
@@ -108,12 +103,15 @@ class image_converter:
 
         return positions
 
-    def process_color(self, img, colour, colour_threshold):
+    # Processes a provided image to a grayscale image using the provided colours and colour thresholds.
+    def process_colour(self, img, colour, colour_threshold):
         return self.greyscale(cython_functions.select_colour(img.copy(), colour, colour_threshold))
 
+    # Makes an image greyscale.
     def greyscale(self, img):
         return cv2.cvtColor(np.asarray(img), cv2.COLOR_BGR2GRAY)
 
+    # Very similar to process_colour, but also removes thin parts of the image to remove the rectangle.
     def process_orange(self, img, colour, colour_threshold):
         img = cython_functions.select_colour(img.copy(), colour, colour_threshold)
 
@@ -121,14 +119,10 @@ class image_converter:
         # is a very effective way of removing all traces of the rectangle while still maintaining as much
         # of the circle as possible
         cython_functions.remove_thin_bits(img, 10, 2)
-        grey = self.greyscale(img)
-        # kernel = np.ones((3, 3), np.uint8)
-        # dilated = cv2.dilate(grey.copy(), kernel, iterations=1)
-        # eroded = cv2.erode(grey, kernel, iterations=1)
 
-        return grey
+        return self.greyscale(img)
 
-
+    # A debug function for visualising the calculated target positions
     def draw_spot_at(self, img, pos):
         try:
             img[pos[1], pos[0]] = [255, 255, 255]
@@ -138,45 +132,6 @@ class image_converter:
             img[pos[1], pos[0]-1] = [0, 0, 0]
         except:
             return
-
-    # 128 pixels = 5m then 25.6 pixels to a metre.
-
-    def calculate_joint_angles(self, actual_target_pos, test_angle):
-        actual_target_pos = list(actual_target_pos)
-        magnitude_of_input = math.sqrt(actual_target_pos[1] * actual_target_pos[1] + actual_target_pos[0] * actual_target_pos[0])
-        angle_of_input = math.atan(actual_target_pos[2]/magnitude_of_input)
-        actual_target_pos[2] = 1.41 * math.tan(angle_of_input)
-
-        beta = math.pi / 2 - angle_of_input
-        pos = test_angle % (math.pi * 2)
-        test_angle = math.atan(math.cos(beta) * math.tan(test_angle))
-        test_angle += math.pi if math.pi / 2 < pos < math.pi * 3 / 2 else 0
-        test_angle = (test_angle + math.pi) % (math.pi * 2) - math.pi
-
-        x = actual_target_pos[0]
-        y = actual_target_pos[1]
-        joint1 = (-test_angle + math.atan2(y, x)) % (math.pi * 2) - math.pi
-
-        test_angle = test_angle if test_angle < 0 else math.pi - test_angle
-        c = math.cos(test_angle + math.pi * 3 / 4)
-        s = math.sin(test_angle + math.pi * 3 / 4)
-        target_pos = [c - s, s + c, actual_target_pos[2]]
-        joint2 = -math.atan2(target_pos[1], target_pos[2])
-        target_pos_magnitude = math.sqrt(target_pos[2] * target_pos[2] + target_pos[1] * target_pos[1])
-        transformed_target_pos = [target_pos[0], target_pos_magnitude * math.copysign(1, target_pos[1]), 0]
-        joint3 = math.atan2(transformed_target_pos[0], transformed_target_pos[1])
-
-        return joint1, joint2, joint3
-
-    def angle_between_three_points(self, a, b, c):
-        ba = a - b
-        bc = c - b
-        return self.angle_between_two_vectors(ba, bc)
-
-    def angle_between_two_vectors(self, ba, bc):
-        cosine_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
-        return np.arccos(cosine_angle)
-        
 
     #calculate the forward kinematics equations, q is an array of the input angles, return the coordinates of the end effector    
     def ForwardK (self, q):
@@ -202,57 +157,177 @@ class image_converter:
         Jacobian = np.array([J1,J2,J3,J4]).transpose()  #transpose because J1 to J4 are initially lines, we want them as columns
         return Jacobian
 
-      # Estimate control inputs for open-loop control, with q the estimation of the set of input angles, and pos_d the desired position, used for development purposes
-    def open_loop_control(self,q,pos_d):
-        # estimate time step
-        cur_time = np.array([rospy.get_time()])
-        dt = self.time_previous_step2 - cur_time
-        self.time_previous_step2 = cur_time
-        J_inv = np.linalg.pinv(self.calculate_jacobian(q))  # calculating the pseudo inverse of Jacobian
-        # estimate derivative of desired trajectory
-        self.d_error = (pos_d - self.error)/dt
-        self.error = pos_d
-        q_d = q + (dt * np.dot(J_inv, self.d_error.transpose()))  # desired joint angles to follow the trajectory
-        return q_d
-
       # Estimate control inputs for closed-loop control, with q input angles, pos_d the desired position and pos_c the current position
     def closed_loop_control(self,q,pos_c,pos_d):
-        #P parameters
-        Kp = np.array([[10,0,0],[0,10,0],[0,0,10]])
-        dt=0.005
-        self.d_error = ((pos_d - pos_c) - self.error)/dt
-        self.error = pos_d-pos_c
-        J_inv =self.calculate_jacobian(q).transpose()
-        # calculating an approximation of the psudeo inverse of Jacobian
-        dq_d =np.dot(J_inv, (np.dot(Kp,self.error.transpose()) ) )
-        q_d = (q + (dt * dq_d))  # control input (angular position of joints)
-        return q_d
-
-    # Estimate control inputs for closed-loop control, with q input angles, pos_d the desired position and pos_c the current position
-    #second version, with defects but makes more sense to me
-    def closed_loop_control2(self,q,pos_c,pos_d):
-        #PI parameters
-        Kp = np.array([[0.5,0,0],[0,0.5,0],[0,0,0.5]])
-       	Kd = np.array([[0.005,0,0],[0,0.005,0],[0,0,0.005]])
+        # PI parameters
+        Kp = np.array([[0.5, 0, 0], [0, 0.5, 0], [0, 0, 0.5]])
+        Kd = np.array([[0.005, 0, 0], [0, 0.005, 0], [0, 0, 0.005]])
         # estimate time step
         cur_time = np.array([rospy.get_time()])
-        dt = self.time_previous_step - cur_time
+        dt = cur_time - self.time_previous_step
         self.time_previous_step = cur_time
-        # estimate the position's velocity error and the derivative of it
-        self.d2_error = ((pos_d-pos_c)/dt -self.d_error)/dt
-        self.d_error = (pos_d-pos_c)/dt
-        # calculating the psudeo inverse of Jacobian
-        J_inv =np.linalg.pinv(self.calculate_jacobian(q))
-        #calculating the new joint angle velocity 
-        dq_d =np.dot(J_inv, (np.dot(Kp,self.d_error.transpose()) + np.dot(Kd,self.d2_error.transpose()) ) )
-        q_d = (q + (dt * dq_d))  # the joint angle velocity is now converted into a small variation in joint angle input
+
+        self.d_error = ((pos_d - pos_c) - self.error)/dt
+        self.error = pos_d-pos_c
+        # calculating an approximation of the psudeo inverse of Jacobian
+        J_inv = self.calculate_jacobian(q).transpose()
+        dq_d = np.dot(J_inv, (np.dot(Kp,self.error.transpose()) ) )
+        q_d = (q + (dt * dq_d))  # control input (angular position of joints)
+
         return q_d
 
-    # Recieve data and save it for camera 1's callback.
+    # Calculates the 3D positions of the different blobs we want to know about.
+    def calculate_blob_positions(self, img1, img2):
+        # Absolute value of the location of the yellow sphere
+        yellow_sphere_location = np.array([0, 0, 0.5])
+        # Output array
+        master_positions = np.zeros(shape=(5,3))
+
+        positions1 = self.get_positions(img1)
+        positions2 = self.get_positions(img2)
+
+        # Process image 1's determined positions.
+        for i, pos in enumerate(positions1):
+            master_positions[i] = np.array([-1, pos[0], pos[1]])
+
+            self.draw_spot_at(img1, pos)
+
+        # Process image 2's determined positions. (Using the average Z position)
+        for i, pos in enumerate(positions2):
+            old_pos = master_positions[i].copy()
+
+            avg = (old_pos[2] + pos[1])/2 if old_pos[2] != -1 and pos[1] != -1 else -1
+
+            master_positions[i] = np.array([pos[0], old_pos[1], avg])
+
+            self.draw_spot_at(img2, pos)
+
+        # If we don't happen to have any positional data for one of the blobs, use the last known position.
+        for i in range(5):
+            for j in range(3):
+                if master_positions[i][j] == -1:
+                    master_positions[i][j] = self.last_known_locations[i][j]
+                else:
+                    self.last_known_locations[i][j] = master_positions[i][j]
+
+        world_center = master_positions[0].copy()
+        for i in range(5):
+            master_positions[i] -= world_center
+
+        # Convert pixel distances into real world distances
+        # Value calculated manually on an earlier run of the program
+        master_positions /= 25.6
+
+        for i in range(5):
+            # Since the y coordinate of the images is flipped, we need to flip it again to
+            # get back to sensible real world results.
+            master_positions[i][2] *= -1
+            # Add the yellow sphere location to the results to get them into world space.
+            master_positions[i] += yellow_sphere_location
+
+        return master_positions
+
+
+    # Calculates the angle between three 3D points.
+    def angle_between_three_points(self, a, b, c):
+        ba = a - b
+        bc = c - b
+        return self.angle_between_two_vectors(ba, bc)
+
+    # Calculates the angle between two 3D vectors.
+    def angle_between_two_vectors(self, ba, bc):
+        cosine_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
+        return np.arccos(cosine_angle)
+
+    def magnitude(self, x, y):
+        return math.sqrt(x*x+y*y)
+
+    # Establishes the desired angles of joints 1, 2 and 3 based on the provided angle and
+    # the 'target' position (The position of the green blob relative to the yellow blob)
+    def calculate_joints_1_2_3(self, green_blob_vector, angle):
+        green_blob_vector = list(green_blob_vector)
+
+        # Use the equation found on https://en.wikipedia.org/wiki/Universal_joint to calculate the angle to rotate joint1 by.
+        magnitude_of_input = self.magnitude(green_blob_vector[0], green_blob_vector[1])
+        angle_of_input = math.atan(green_blob_vector[2] / magnitude_of_input)
+        beta = math.pi / 2 - angle_of_input
+        clamped_angle = angle % (math.pi * 2)
+        angle = math.atan(math.cos(beta) * math.tan(angle))
+
+        # Modify the angle so it's in a state useful for calculating joint 1
+        angle += math.pi if math.pi / 2 < clamped_angle < math.pi * 3 / 2 else 0
+        angle = (angle + math.pi) % (math.pi * 2) - math.pi
+
+        # Calculate joint 1's angle. It is simply a sum of the desired universal joint angle and
+        # the initial angle of the input vector.
+        joint1 = (-angle + math.atan2(green_blob_vector[1], green_blob_vector[0])) % (math.pi * 2) - math.pi
+
+        # Modify the angle again so it's more useful for calculating the target and transformed_target angles
+        angle = (angle if angle < 0 else math.pi - angle) + math.pi * 3 / 4
+
+        # Establish a new working vector, rotated so we're now working in joint 1's transform.
+        c = math.cos(angle)
+        s = math.sin(angle)
+        new_vector = [c - s, s + c, green_blob_vector[2]]
+
+        # Calculate the angle of joint2 so it's pointing in the direction of the new vector.
+        joint2 = -math.atan(new_vector[1] / new_vector[2])
+        # Calculate the angle of joint3 in a similar way.
+        joint3 = math.atan(new_vector[0] / self.magnitude(new_vector[1], new_vector[2]) * math.copysign(1, new_vector[1]))
+
+        return joint1, joint2, joint3
+
+    def calculate_universal_joint_rotation(self, master_positions):
+        # Calculate the basic angle of the red joint relative to the green and yellow ones by finding intersecting plane angles.
+        normal_1 = np.cross(master_positions[0] - master_positions[1], master_positions[1] - master_positions[2])
+        normal_2 = np.cross(master_positions[1] - master_positions[2], master_positions[2] - master_positions[3])
+        angle = (self.angle_between_two_vectors(normal_1, normal_2))
+        angle -= math.pi / 2
+
+        # Establish whether the plane is intersecting 'backwards' or not - The angle between two planes
+        # is not signed, but we want our output to be signed.
+        d = np.dot(normal_1, master_positions[2])
+        c = np.dot(normal_1, master_positions[3])
+        backward = math.copysign(1, c - d)
+
+        # Alter the angle based on whether we're intersecting backwards or not.
+        old_angle = angle
+        if backward == 1 and old_angle < 0:
+            angle *= -1
+        if backward == -1 and old_angle < 0:
+            angle += math.pi
+        if backward == -1 and old_angle > 0:
+            angle += math.pi
+        if backward == 1 and old_angle > 0:
+            angle = math.pi * 2 - angle
+
+        return angle
+
+    def calculate_joint_angles(self, master_positions):
+        angle1 = self.calculate_universal_joint_rotation(master_positions)
+        # The direction we want the green blob to point in
+        direction = master_positions[2] - master_positions[1]
+        joint1, joint2, joint3 = self.calculate_joints_1_2_3(direction, angle1)
+        joint4 = math.pi - self.angle_between_three_points(master_positions[1], master_positions[2], master_positions[3])
+
+        # Rotate all of the angles to ensure that they're between 0 and pi/2
+        if joint1 < 0:
+            joint1 += math.pi
+            joint2 *= -1
+            joint3 *= -1
+            joint4 *= -1
+        if joint1 > math.pi/2:
+            joint1 = math.pi-joint1
+            joint3 *= -1
+            joint4 *= -1
+
+        return (joint1, joint2, joint3, joint4)
+
+    # Receive data and save it for camera 1's callback.
     def callback1(self, data):
         self.cv_image1 = self.bridge.imgmsg_to_cv2(data, "bgr8").copy()
 
-    # Recieve data from camera 1, process it, and publish
+    # Receive data from camera 1, process it, and publish
     def callback2(self, data):
         self.estimating = (time.time() % 5 < 2.5)
 
@@ -261,7 +336,6 @@ class image_converter:
         size = (400, 400)
         centre1 = (400, 500)
         centre2 = (400, 500)
-        yellow_sphere_location = np.array([0, 0, 0.5])
 
         # Crop the images so we're not doing unnecessary work
         img1 = self.cv_image1[
@@ -273,90 +347,11 @@ class image_converter:
                centre2[0] - size[0] / 2:centre2[0] + size[0] / 2
                ].copy()
 
-        positions1 = self.get_positions(img1, 1)
-        positions2 = self.get_positions(img2, 2)
+        master_positions = self.calculate_blob_positions(img1, img2)
 
-        master_positions = np.zeros(shape=(5,3))
+        (joint1, joint2, joint3, joint4) = self.calculate_joint_angles(master_positions)
 
-        for i, pos in enumerate(positions1):
-            master_positions[i] = np.array([-1, pos[0], pos[1]])
-
-            self.draw_spot_at(img1, pos)
-
-        for i, pos in enumerate(positions2):
-            old_pos = master_positions[i].copy()
-
-            avg = (old_pos[2] + pos[1])/2 if old_pos[2] != -1 and pos[1] != -1 else -1
-
-            master_positions[i] = np.array([pos[0], old_pos[1], avg])
-
-            self.draw_spot_at(img2, pos)
-
-            # if abs(old_pos[2] - pos[1]) > 20 and pos[1] != -1 and old_pos[2] != -1:
-            #     print("Warning. ", old_pos[2], pos[1])
-
-        for i in range(5):
-            for j in range(3):
-                if master_positions[i][j] == -1:
-                    master_positions[i][j] = self.last_known_locations[i][j]
-                    # print("We didn't have position data for sphere " + str(i) + ", so assumed last known position.")
-                else:
-                    self.last_known_locations[i][j] = master_positions[i][j]
-
-        world_center = master_positions[0].copy()
-        for i in range(5):
-            master_positions[i] -= world_center
-
-        # Convert pixel distances into real world distances
-        master_positions /= 25
-
-        for i in range(5):
-            # Since the y coordinate of the images is flipped, we need to flip it again to
-            # get back to sensible real world results.
-            master_positions[i][2] *= -1
-            master_positions[i] += yellow_sphere_location
-
-
-
-            # This helps the calculations be more accurate, but can't be justified so it's unused
-            # master_positions[i][1] *= 4.0/5
-
-        # target_pos = master_positions[4]-master_positions[1]
-        # joint2 = -math.atan(target_pos[1]/target_pos[2])
-        # target_pos_magnitude = math.sqrt(target_pos[2]*target_pos[2] + target_pos[1]*target_pos[1])
-        # transformed_target_pos = [target_pos[0], target_pos_magnitude * math.copysign(1, target_pos[1]), 0]
-        # joint3 = math.atan(transformed_target_pos[0]/transformed_target_pos[1])
-        # joint1 = 0
-        # joint4 = 0
-
-        actual_target_pos = master_positions[2]-master_positions[1]
-        test_angle = time.time()*2
-
-        normal_1 = np.cross(master_positions[0]-master_positions[1], master_positions[1]-master_positions[2])
-        normal_2 = np.cross(master_positions[1]-master_positions[2], master_positions[2]-master_positions[3])
-        d = np.dot(normal_1, master_positions[2])
-        c = np.dot(normal_1, master_positions[3])
-
-        angle1 = (self.angle_between_two_vectors(normal_1, normal_2))
-        test1, test2 = math.copysign(1, np.dot(normal_1, normal_2)), math.copysign(1, c-d)
-        angle1 -= math.pi/2
-
-        old_angle1 = angle1
-        if test2 == 1 and old_angle1 < 0:
-            angle1 *= -1
-        if test2 == -1 and old_angle1 < 0:
-            angle1 += math.pi
-        if test2 == -1 and old_angle1 > 0:
-            angle1 += math.pi
-        if test2 == 1 and old_angle1 > 0:
-            angle1 = math.pi*2 - angle1
-
-        # test_angle = test_angle % (math.pi * 2)
-        # [-3.24 -2.28  5.1 ]
-        joint1, joint2, joint3 = self.calculate_joint_angles(actual_target_pos, angle1)
-        joint4 = math.pi-self.angle_between_three_points(master_positions[1], master_positions[2], master_positions[3])
-
-        if self.estimating:
+        if self.estimating: # Remove not
             self.my_estimation = (joint1, joint2, joint3, joint4)
 
         cv2.imshow('window1', np.asarray(img1))
@@ -364,20 +359,14 @@ class image_converter:
 
         cv2.waitKey(1)
 
-        #current set of angles
+        # current set of angles
         q = np.array(self.q_d)
-        #Current position of the end_effector
+        # Current position of the end_effector
         end_effector_pos = self.ForwardK(q)
-        #position of the target
+        # position of the target
         target_p = master_positions[4]
-        # find joints angle command
-        # self.q_d = self.open_loop_control(q,np.array(target_p))
-        #self.q_d = self.closed_loop_control(q,end_effector_pos, target_p)
-        #other kind of closed control : the angle are not within range but the theoritical end effector position is quite good (with defects)
-       	self.q_d = self.closed_loop_control2(q,end_effector_pos, target_p)
-        print(self.q_d)
 
-
+        self.q_d = self.closed_loop_control(q,end_effector_pos, target_p)
 
         # Publish the results
         try:
@@ -389,11 +378,25 @@ class image_converter:
             self.target_y_pub.publish(master_positions[4][1])
             self.target_z_pub.publish(master_positions[4][2])
 
-            #send the desired angles to the robot so that it can follow the target
-            self.robot_joint1_pub.publish(self.q_d[0])
-            self.robot_joint2_pub.publish(self.q_d[1])
-            self.robot_joint3_pub.publish(self.q_d[2])
-            self.robot_joint4_pub.publish(self.q_d[3])
+            testing_joint_estimation = True # Change this to true to test the joint estimation code out.
+            if testing_joint_estimation:
+                if self.estimating:
+                    joint1, joint2, joint3, joint4 = (0.9, -0.3, -0.2, -1)
+                else:
+                    joint1, joint2, joint3, joint4 = self.my_estimation
+
+                print(joint1, joint2, joint3, joint4)
+
+                self.robot_joint1_pub.publish(joint1)
+                self.robot_joint2_pub.publish(joint2)
+                self.robot_joint3_pub.publish(joint3)
+                self.robot_joint4_pub.publish(joint4)
+            else:
+                #send the desired angles to the robot so that it can follow the target
+                self.robot_joint1_pub.publish(self.q_d[0])
+                self.robot_joint2_pub.publish(self.q_d[1])
+                self.robot_joint3_pub.publish(self.q_d[2])
+                self.robot_joint4_pub.publish(self.q_d[3])
 
             #send the estimated joint angles to a topic, to be able to compare it with the command
             """ self.robot_joint1_est.publish(joint1)
